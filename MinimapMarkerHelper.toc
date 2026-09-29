@@ -1,0 +1,8 @@
+## Interface: 120100
+## Title: Minimap Marker Helper
+## Notes: Personal minimap raid marker layout helper.
+## Author: Personal
+## Version: 1.0.0
+## SavedVariables: MinimapMarkerHelperDB
+
+MinimapMarkerHelper.lua

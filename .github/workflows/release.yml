@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+
+      - name: Validate version and package addon
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          toc_version="$(sed -n 's/^## Version: *//p' MinimapMarkerHelper.toc | head -n 1 | tr -d '\r')"
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag must use vMAJOR.MINOR.PATCH format: $tag"
+            exit 1
+          fi
+
+          if [[ "$toc_version" != "$version" ]]; then
+            echo "TOC version ($toc_version) must match tag version ($version)."
+            exit 1
+          fi
+
+          package_dir="package/MinimapMarkerHelper"
+          mkdir -p "$package_dir"
+          cp MinimapMarkerHelper.toc MinimapMarkerHelper.lua "$package_dir/"
+          (
+            cd package
+            zip -r "../MinimapMarkerHelper-${tag}.zip" MinimapMarkerHelper
+          )
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive="MinimapMarkerHelper-${GITHUB_REF_NAME}.zip"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$archive" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$archive" --generate-notes --title "$GITHUB_REF_NAME"
+          fi
