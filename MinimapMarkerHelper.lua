@@ -42,7 +42,6 @@ local boardMarkers = {}
 local minimapMarkers = {}
 local paletteButtons = {}
 local minimapOverlay
-local largeArrow
 local boardLines = {}
 
 local function isValidMarker(markerID)
@@ -81,9 +80,7 @@ local function initializeDatabase()
     if type(MinimapMarkerHelperDB.enabled) ~= "boolean" then
         MinimapMarkerHelperDB.enabled = true
     end
-    if type(MinimapMarkerHelperDB.largePlayerArrow) ~= "boolean" then
-        MinimapMarkerHelperDB.largePlayerArrow = false
-    end
+    MinimapMarkerHelperDB.largePlayerArrow = nil
     if type(MinimapMarkerHelperDB.hideGroundTextures) ~= "boolean" then
         MinimapMarkerHelperDB.hideGroundTextures = false
     end
@@ -181,36 +178,6 @@ local function refreshMinimap()
     end
 end
 
-local function updateLargeArrow()
-    if not largeArrow or not MinimapMarkerHelperDB then
-        return
-    end
-
-    local enabled = MinimapMarkerHelperDB.largePlayerArrow
-    largeArrow:SetShown(enabled)
-    largeArrow:SetScript("OnUpdate", nil)
-    if not enabled then
-        return
-    end
-
-    local elapsed = 0
-    largeArrow:SetScript("OnUpdate", function(_, delta)
-        elapsed = elapsed + delta
-        if elapsed < 0.10 then
-            return
-        end
-        elapsed = 0
-
-        local rotation = 0
-        if GetCVar and GetCVar("rotateMinimap") ~= "1" then
-            rotation = GetPlayerFacing() or 0
-        end
-        if largeArrow.texture and largeArrow.texture.SetRotation then
-            pcall(largeArrow.texture.SetRotation, largeArrow.texture, rotation)
-        end
-    end)
-end
-
 local function updateGroundTextures()
     if not MinimapMarkerHelperDB or not C_Minimap or not C_Minimap.SetDrawGroundTextures then
         return
@@ -222,7 +189,6 @@ end
 local function refreshAll()
     refreshBoard()
     refreshMinimap()
-    updateLargeArrow()
     updateGroundTextures()
 end
 
@@ -461,14 +427,7 @@ local function buildPanel()
             refreshMinimap()
         end)
 
-    local arrowCheckbox = createCheckbox(panel, "플레이어 방향 화살표 크게 표시", 590, -440,
-        function() return MinimapMarkerHelperDB.largePlayerArrow end,
-        function(value)
-            MinimapMarkerHelperDB.largePlayerArrow = value
-            updateLargeArrow()
-        end)
-
-    local groundTextureCheckbox = createCheckbox(panel, "미니맵 배경 숨기기", 590, -475,
+    local groundTextureCheckbox = createCheckbox(panel, "미니맵 배경 숨기기", 590, -440,
         function() return MinimapMarkerHelperDB.hideGroundTextures end,
         function(value)
             MinimapMarkerHelperDB.hideGroundTextures = value
@@ -477,7 +436,6 @@ local function buildPanel()
 
     panel:SetScript("OnShow", function()
         markerCheckbox:SetChecked(MinimapMarkerHelperDB.enabled)
-        arrowCheckbox:SetChecked(MinimapMarkerHelperDB.largePlayerArrow)
         groundTextureCheckbox:SetChecked(MinimapMarkerHelperDB.hideGroundTextures)
         syncMarkerSizeSlider()
         refreshBoard()
@@ -505,17 +463,6 @@ local function buildMinimapUI()
     for markerID = 1, 8 do
         minimapMarkers[markerID] = createMarkerTexture(minimapOverlay, 24)
     end
-
-    largeArrow = CreateFrame("Frame", nil, Minimap)
-    largeArrow:SetAllPoints(Minimap)
-    largeArrow:SetFrameStrata("TOOLTIP")
-    largeArrow:SetFrameLevel(Minimap:GetFrameLevel() + 20)
-    largeArrow:EnableMouse(false)
-    largeArrow.texture = largeArrow:CreateTexture(nil, "OVERLAY", nil, 7)
-    largeArrow.texture:SetSize(48, 48)
-    largeArrow.texture:SetPoint("CENTER")
-    largeArrow.texture:SetTexture("Interface\\Minimap\\MinimapArrow")
-    largeArrow:Hide()
 
     local button = CreateFrame("Button", "MinimapMarkerHelperMinimapButton", Minimap)
     button:SetSize(24, 24)
