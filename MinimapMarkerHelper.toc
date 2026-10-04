@@ -2,7 +2,7 @@
 ## Title: Minimap Marker Helper
 ## Notes: Personal minimap raid marker layout helper.
 ## Author: Personal
-## Version: 1.0.0
+## Version: 1.0.1
 ## SavedVariables: MinimapMarkerHelperDB
 
 MinimapMarkerHelper.lua
