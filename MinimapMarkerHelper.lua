@@ -1,4 +1,5 @@
 local ADDON_NAME = ...
+local ADDON_PATH = "Interface\\AddOns\\" .. ADDON_NAME .. "\\"
 
 local RAID_ICON_TEXTURE = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_%d"
 local SECTOR_COUNT = 8
@@ -10,6 +11,48 @@ local MIN_MARKER_SIZE = 16
 local MAX_MARKER_SIZE = 32
 local MARKER_SIZE_STEP = 2
 local DEFAULT_MARKER_SIZE = 24
+local MIN_MINIMAP_ICON_SCALE = 1.0
+local MAX_MINIMAP_ICON_SCALE = 3.0
+local MINIMAP_ICON_SCALE_STEP = 0.2
+local DEFAULT_MINIMAP_ICON_SCALE = 1.0
+local DEFAULT_PROFILE_NAME = "기본 배치"
+local ENTRANCE_BORDER_COLOR = { 1.0, 0.66, 0.12, 1.0 }
+local PANEL_WIDTH = 950
+local RIGHT_COLUMN_X = 580
+local RIGHT_COLUMN_WIDTH = 345
+local RIGHT_CONTENT_X = RIGHT_COLUMN_X + 10
+local PANEL_TOP_PADDING = 48
+local PANEL_BOTTOM_PADDING = 12
+local SECTION_GAP = 2
+local SECTION_TITLE_TO_CONTENT_GAP = 30
+local SECTION_BOTTOM_PADDING = 12
+local ADDON_CONTENT_HEIGHT = 24
+local MARKER_BUTTON_WIDTH = 156
+local MARKER_BUTTON_HEIGHT = 36
+local MARKER_BUTTON_ROW_GAP = 8
+local MARKER_BUTTON_COLUMN_GAP = 9
+local MARKER_ACTION_GAP = 20
+local MARKER_ACTION_HEIGHT = 28
+local MARKER_GRID_HEIGHT = MARKER_BUTTON_HEIGHT * 4 + MARKER_BUTTON_ROW_GAP * 3
+local MARKER_CONTENT_HEIGHT = MARKER_GRID_HEIGHT + MARKER_ACTION_GAP + MARKER_ACTION_HEIGHT
+local SLIDER_LABEL_TO_SLIDER_OFFSET = 24
+local SETTINGS_SECOND_LABEL_OFFSET = 74
+local SETTINGS_GROUND_CHECKBOX_OFFSET = 140
+local SETTINGS_CONTENT_HEIGHT = SETTINGS_GROUND_CHECKBOX_OFFSET + 24
+local PROFILE_ROW_HEIGHT = 24
+local PROFILE_ROW_GAP = 12
+local PROFILE_ACTION_HEIGHT = 26
+local PROFILE_CONTENT_HEIGHT = PROFILE_ROW_HEIGHT + PROFILE_ROW_GAP + PROFILE_ACTION_HEIGHT
+local function optionSectionHeight(contentHeight)
+    return SECTION_TITLE_TO_CONTENT_GAP + contentHeight + SECTION_BOTTOM_PADDING
+end
+local PANEL_HEIGHT = PANEL_TOP_PADDING
+    + optionSectionHeight(ADDON_CONTENT_HEIGHT)
+    + optionSectionHeight(MARKER_CONTENT_HEIGHT)
+    + optionSectionHeight(SETTINGS_CONTENT_HEIGHT)
+    + optionSectionHeight(PROFILE_CONTENT_HEIGHT)
+    + SECTION_GAP * 3
+    + PANEL_BOTTOM_PADDING
 local atan2 = math.atan2 or function(y, x)
     if x > 0 then
         return math.atan(y / x)
@@ -43,6 +86,7 @@ local minimapMarkers = {}
 local paletteButtons = {}
 local minimapOverlay
 local boardLines = {}
+local refreshAll
 
 local function isValidMarker(markerID)
     return type(markerID) == "number" and markerID >= 1 and markerID <= 8 and markerID == math.floor(markerID)
@@ -50,6 +94,20 @@ end
 
 local function isValidSector(sector)
     return type(sector) == "number" and sector >= 1 and sector <= SECTOR_COUNT and sector == math.floor(sector)
+end
+
+local function copyMarkers(markers)
+    local copiedMarkers = {}
+    if type(markers) ~= "table" then
+        return copiedMarkers
+    end
+
+    for markerID, sector in pairs(markers) do
+        if isValidMarker(markerID) and isValidSector(sector) then
+            copiedMarkers[markerID] = sector
+        end
+    end
+    return copiedMarkers
 end
 
 local function sectorFromAngle(angle)
@@ -77,8 +135,9 @@ local function initializeDatabase()
         MinimapMarkerHelperDB = {}
     end
 
-    if type(MinimapMarkerHelperDB.enabled) ~= "boolean" then
-        MinimapMarkerHelperDB.enabled = true
+    MinimapMarkerHelperDB.enabled = nil
+    if type(MinimapMarkerHelperDB.addonEnabled) ~= "boolean" then
+        MinimapMarkerHelperDB.addonEnabled = true
     end
     MinimapMarkerHelperDB.largePlayerArrow = nil
     if type(MinimapMarkerHelperDB.hideGroundTextures) ~= "boolean" then
@@ -92,6 +151,14 @@ local function initializeDatabase()
         markerSize = DEFAULT_MARKER_SIZE
     end
     MinimapMarkerHelperDB.markerSize = markerSize
+    local minimapIconScale = tonumber(MinimapMarkerHelperDB.minimapIconScale)
+    if minimapIconScale then
+        minimapIconScale = math.floor(minimapIconScale / MINIMAP_ICON_SCALE_STEP + 0.5) * MINIMAP_ICON_SCALE_STEP
+    end
+    if not minimapIconScale or minimapIconScale < MIN_MINIMAP_ICON_SCALE or minimapIconScale > MAX_MINIMAP_ICON_SCALE then
+        minimapIconScale = DEFAULT_MINIMAP_ICON_SCALE
+    end
+    MinimapMarkerHelperDB.minimapIconScale = minimapIconScale
     if type(MinimapMarkerHelperDB.markers) ~= "table" then
         MinimapMarkerHelperDB.markers = {}
     end
@@ -109,6 +176,69 @@ local function initializeDatabase()
         end
     end
     MinimapMarkerHelperDB.markers = cleanedMarkers
+
+    if type(MinimapMarkerHelperDB.profiles) ~= "table" then
+        MinimapMarkerHelperDB.profiles = {}
+    end
+    for profileName, profile in pairs(MinimapMarkerHelperDB.profiles) do
+        if type(profileName) ~= "string" or type(profile) ~= "table" then
+            MinimapMarkerHelperDB.profiles[profileName] = nil
+        else
+            MinimapMarkerHelperDB.profiles[profileName] = {
+                markers = copyMarkers(profile.markers),
+            }
+        end
+    end
+    if next(MinimapMarkerHelperDB.profiles) == nil then
+        MinimapMarkerHelperDB.profiles[DEFAULT_PROFILE_NAME] = {
+            markers = copyMarkers(cleanedMarkers),
+        }
+    end
+    if type(MinimapMarkerHelperDB.activeProfile) ~= "string" or not MinimapMarkerHelperDB.profiles[MinimapMarkerHelperDB.activeProfile] then
+        MinimapMarkerHelperDB.activeProfile = DEFAULT_PROFILE_NAME
+        if not MinimapMarkerHelperDB.profiles[DEFAULT_PROFILE_NAME] then
+            for profileName in pairs(MinimapMarkerHelperDB.profiles) do
+                MinimapMarkerHelperDB.activeProfile = profileName
+                break
+            end
+        end
+    end
+end
+
+local function normalizeProfileName(profileName)
+    if type(profileName) ~= "string" then
+        return nil
+    end
+    profileName = profileName:match("^%s*(.-)%s*$")
+    if profileName == "" then
+        return nil
+    end
+    return profileName:sub(1, 24)
+end
+
+local function saveProfile(profileName)
+    profileName = normalizeProfileName(profileName)
+    if not profileName then
+        return nil
+    end
+    MinimapMarkerHelperDB.profiles[profileName] = {
+        markers = copyMarkers(MinimapMarkerHelperDB.markers),
+    }
+    MinimapMarkerHelperDB.activeProfile = profileName
+    return profileName
+end
+
+local function loadProfile(profileName)
+    profileName = normalizeProfileName(profileName)
+    local profile = profileName and MinimapMarkerHelperDB.profiles[profileName]
+    if not profile then
+        return nil
+    end
+    MinimapMarkerHelperDB.markers = copyMarkers(profile.markers)
+    MinimapMarkerHelperDB.activeProfile = profileName
+    selectedMarker = nil
+    refreshAll()
+    return profileName
 end
 
 local function createMarkerTexture(parent, size)
@@ -116,6 +246,36 @@ local function createMarkerTexture(parent, size)
     texture:SetSize(size, size)
     texture:Hide()
     return texture
+end
+
+local function refreshEntranceBorder()
+    if not MinimapMarkerHelperDB then
+        return
+    end
+
+    for lineIndex = 1, SECTOR_COUNT * 2 do
+        local line = boardLines[lineIndex]
+        if line then
+            line:SetVertexColor(0.72, 0.76, 0.68, 0.85)
+        end
+    end
+
+    local entranceSector = MinimapMarkerHelperDB.markers[8]
+    if not isValidSector(entranceSector) then
+        return
+    end
+
+    local entranceLines = {
+        entranceSector,
+        entranceSector % SECTOR_COUNT + 1,
+        entranceSector + SECTOR_COUNT,
+    }
+    for _, lineIndex in ipairs(entranceLines) do
+        local line = boardLines[lineIndex]
+        if line then
+            line:SetVertexColor(unpack(ENTRANCE_BORDER_COLOR))
+        end
+    end
 end
 
 local function refreshBoard()
@@ -143,6 +303,7 @@ local function refreshBoard()
             button:SetBackdropBorderColor(selected and 1 or 0, selected and 0.82 or 0, selected and 0.16 or 0, selected and 1 or 0)
         end
     end
+    refreshEntranceBorder()
 end
 
 local function refreshMinimap()
@@ -150,7 +311,7 @@ local function refreshMinimap()
         return
     end
 
-    local showMarkers = MinimapMarkerHelperDB.enabled
+    local showMarkers = MinimapMarkerHelperDB.addonEnabled
     minimapOverlay:SetShown(showMarkers)
     if not showMarkers then
         return
@@ -178,17 +339,28 @@ local function refreshMinimap()
     end
 end
 
+local function updateMinimapIconScale()
+    if not MinimapMarkerHelperDB or not Minimap or type(Minimap.SetIconScale) ~= "function" then
+        return
+    end
+
+    local iconScale = MinimapMarkerHelperDB.addonEnabled and MinimapMarkerHelperDB.minimapIconScale or DEFAULT_MINIMAP_ICON_SCALE
+    pcall(Minimap.SetIconScale, Minimap, iconScale)
+end
+
 local function updateGroundTextures()
     if not MinimapMarkerHelperDB or not C_Minimap or not C_Minimap.SetDrawGroundTextures then
         return
     end
 
-    pcall(C_Minimap.SetDrawGroundTextures, not MinimapMarkerHelperDB.hideGroundTextures)
+    local showGroundTextures = not MinimapMarkerHelperDB.addonEnabled or not MinimapMarkerHelperDB.hideGroundTextures
+    pcall(C_Minimap.SetDrawGroundTextures, showGroundTextures)
 end
 
-local function refreshAll()
+refreshAll = function()
     refreshBoard()
     refreshMinimap()
+    updateMinimapIconScale()
     updateGroundTextures()
 end
 
@@ -276,7 +448,7 @@ end
 
 local function buildPanel()
     panel = CreateFrame("Frame", "MinimapMarkerHelperOptions", UIParent, "BackdropTemplate")
-    panel:SetSize(950, 625)
+    panel:SetSize(PANEL_WIDTH, PANEL_HEIGHT)
     panel:SetPoint("CENTER")
     panel:SetFrameStrata("DIALOG")
     panel:EnableMouse(true)
@@ -325,16 +497,46 @@ local function buildPanel()
         boardMarkers[markerID] = createMarkerTexture(board, 42)
     end
 
-    local paletteTitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    paletteTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 590, -57)
-    paletteTitle:SetText("Raid Markers")
+    local function createOptionSection(titleText, y, contentHeight)
+        local height = optionSectionHeight(contentHeight)
+        local section = CreateFrame("Frame", nil, panel, "BackdropTemplate")
+        section:SetSize(RIGHT_COLUMN_WIDTH, height)
+        section:SetPoint("TOPLEFT", panel, "TOPLEFT", RIGHT_COLUMN_X, y)
+        section:SetFrameLevel(panel:GetFrameLevel())
+        section:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = true,
+            tileSize = 16,
+            edgeSize = 12,
+            insets = { left = 3, right = 3, top = 3, bottom = 3 },
+        })
+        section:SetBackdropColor(0.04, 0.06, 0.09, 0.82)
+        section:SetBackdropBorderColor(0.42, 0.42, 0.42, 0.9)
+        section.title = section:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        section.title:SetPoint("TOPLEFT", 12, -10)
+        section.title:SetText(titleText)
+        return y - SECTION_TITLE_TO_CONTENT_GAP, y - height - SECTION_GAP
+    end
+
+    local nextSectionY = -PANEL_TOP_PADDING
+    local addonContentY
+    addonContentY, nextSectionY = createOptionSection("애드온", nextSectionY, ADDON_CONTENT_HEIGHT)
+    local markerContentY
+    markerContentY, nextSectionY = createOptionSection("징표", nextSectionY, MARKER_CONTENT_HEIGHT)
+    local settingsContentY
+    settingsContentY, nextSectionY = createOptionSection("설정", nextSectionY, SETTINGS_CONTENT_HEIGHT)
+    local profileContentY
+    profileContentY = createOptionSection("프로필", nextSectionY, PROFILE_CONTENT_HEIGHT)
 
     for markerID = 1, 8 do
         local button = CreateFrame("Button", nil, panel, "BackdropTemplate")
         local column = (markerID - 1) % 2
         local row = math.floor((markerID - 1) / 2)
-        button:SetSize(156, 36)
-        button:SetPoint("TOPLEFT", panel, "TOPLEFT", 590 + column * 165, -82 - row * 44)
+        button:SetSize(MARKER_BUTTON_WIDTH, MARKER_BUTTON_HEIGHT)
+        button:SetPoint("TOPLEFT", panel, "TOPLEFT",
+            RIGHT_CONTENT_X + column * (MARKER_BUTTON_WIDTH + MARKER_BUTTON_COLUMN_GAP),
+            markerContentY - row * (MARKER_BUTTON_HEIGHT + MARKER_BUTTON_ROW_GAP))
         button:SetBackdrop({
             bgFile = "Interface\\Buttons\\WHITE8X8",
             edgeFile = "Interface\\Buttons\\WHITE8X8",
@@ -361,7 +563,7 @@ local function buildPanel()
 
     local delete = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     delete:SetSize(180, 28)
-    delete:SetPoint("TOPLEFT", panel, "TOPLEFT", 590, -270)
+    delete:SetPoint("TOPLEFT", panel, "TOPLEFT", RIGHT_CONTENT_X, markerContentY - MARKER_GRID_HEIGHT - MARKER_ACTION_GAP)
     delete:SetText("선택한 징표 삭제")
     delete:SetScript("OnClick", function()
         if selectedMarker then
@@ -383,7 +585,7 @@ local function buildPanel()
     end)
 
     local markerSizeLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    markerSizeLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 590, -326)
+    markerSizeLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", RIGHT_CONTENT_X, settingsContentY)
     markerSizeLabel:SetText("미니맵 징표 크기")
 
     local markerSizeValue = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -391,7 +593,7 @@ local function buildPanel()
 
     local markerSizeSlider = CreateFrame("Slider", nil, panel, "UISliderTemplate")
     markerSizeSlider:SetSize(260, 17)
-    markerSizeSlider:SetPoint("TOPLEFT", panel, "TOPLEFT", 590, -350)
+    markerSizeSlider:SetPoint("TOPLEFT", panel, "TOPLEFT", RIGHT_CONTENT_X, settingsContentY - SLIDER_LABEL_TO_SLIDER_OFFSET)
     markerSizeSlider:SetMinMaxValues(MIN_MARKER_SIZE, MAX_MARKER_SIZE)
     markerSizeSlider:SetValueStep(MARKER_SIZE_STEP)
     markerSizeSlider:SetObeyStepOnDrag(true)
@@ -420,24 +622,172 @@ local function buildPanel()
     end)
     syncMarkerSizeSlider()
 
-    local markerCheckbox = createCheckbox(panel, "미니맵에 징표 표시", 590, -405,
-        function() return MinimapMarkerHelperDB.enabled end,
+    local minimapIconScaleLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    minimapIconScaleLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", RIGHT_CONTENT_X, settingsContentY - SETTINGS_SECOND_LABEL_OFFSET)
+    minimapIconScaleLabel:SetText("기본 미니맵 아이콘 크기")
+
+    local minimapIconScaleValue = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    minimapIconScaleValue:SetPoint("LEFT", minimapIconScaleLabel, "RIGHT", 10, 0)
+
+    local minimapIconScaleSlider = CreateFrame("Slider", nil, panel, "UISliderTemplate")
+    minimapIconScaleSlider:SetSize(260, 17)
+    minimapIconScaleSlider:SetPoint("TOPLEFT", panel, "TOPLEFT", RIGHT_CONTENT_X,
+        settingsContentY - SETTINGS_SECOND_LABEL_OFFSET - SLIDER_LABEL_TO_SLIDER_OFFSET)
+    minimapIconScaleSlider:SetMinMaxValues(MIN_MINIMAP_ICON_SCALE, MAX_MINIMAP_ICON_SCALE)
+    minimapIconScaleSlider:SetValueStep(MINIMAP_ICON_SCALE_STEP)
+    minimapIconScaleSlider:SetObeyStepOnDrag(true)
+
+    local minimapIconScaleMinimumLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    minimapIconScaleMinimumLabel:SetPoint("TOPLEFT", minimapIconScaleSlider, "BOTTOMLEFT", 0, -2)
+    minimapIconScaleMinimumLabel:SetText(string.format("%.1f×", MIN_MINIMAP_ICON_SCALE))
+
+    local minimapIconScaleMaximumLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    minimapIconScaleMaximumLabel:SetPoint("TOPRIGHT", minimapIconScaleSlider, "BOTTOMRIGHT", 0, -2)
+    minimapIconScaleMaximumLabel:SetText(string.format("%.1f×", MAX_MINIMAP_ICON_SCALE))
+
+    local function syncMinimapIconScaleSlider()
+        minimapIconScaleSlider:SetValue(MinimapMarkerHelperDB.minimapIconScale)
+        minimapIconScaleValue:SetText(string.format("%.1f×", MinimapMarkerHelperDB.minimapIconScale))
+    end
+
+    minimapIconScaleSlider:SetScript("OnValueChanged", function(_, value)
+        local minimapIconScale = math.floor(value / MINIMAP_ICON_SCALE_STEP + 0.5) * MINIMAP_ICON_SCALE_STEP
+        if minimapIconScale == MinimapMarkerHelperDB.minimapIconScale then
+            return
+        end
+        MinimapMarkerHelperDB.minimapIconScale = minimapIconScale
+        minimapIconScaleValue:SetText(string.format("%.1f×", minimapIconScale))
+        updateMinimapIconScale()
+    end)
+    syncMinimapIconScaleSlider()
+
+    local updateAddonControlState
+    local addonCheckbox = createCheckbox(panel, "애드온 사용", RIGHT_CONTENT_X, addonContentY,
+        function() return MinimapMarkerHelperDB.addonEnabled end,
         function(value)
-            MinimapMarkerHelperDB.enabled = value
-            refreshMinimap()
+            MinimapMarkerHelperDB.addonEnabled = value
+            refreshAll()
+            if updateAddonControlState then
+                updateAddonControlState()
+            end
         end)
 
-    local groundTextureCheckbox = createCheckbox(panel, "미니맵 배경 숨기기", 590, -440,
+    local groundTextureCheckbox = createCheckbox(panel, "미니맵 배경 숨기기", RIGHT_CONTENT_X,
+        settingsContentY - SETTINGS_GROUND_CHECKBOX_OFFSET,
         function() return MinimapMarkerHelperDB.hideGroundTextures end,
         function(value)
             MinimapMarkerHelperDB.hideGroundTextures = value
             updateGroundTextures()
         end)
 
+    local profileDropdown = CreateFrame("Frame", "MinimapMarkerHelperProfileDropdown", panel, "UIDropDownMenuTemplate")
+    profileDropdown:SetPoint("TOPLEFT", panel, "TOPLEFT", RIGHT_COLUMN_X - 5, profileContentY)
+    UIDropDownMenu_SetWidth(profileDropdown, 115)
+    profileDropdown.Text:SetJustifyH("LEFT")
+
+    local profileNameBox = CreateFrame("EditBox", nil, panel, "InputBoxTemplate")
+    profileNameBox:SetSize(110, 24)
+    profileNameBox:SetPoint("TOPLEFT", panel, "TOPLEFT", RIGHT_CONTENT_X + 150, profileContentY)
+    profileNameBox:SetAutoFocus(false)
+    profileNameBox:SetMaxLetters(24)
+
+    local function getProfileNames()
+        local profileNames = {}
+        for profileName in pairs(MinimapMarkerHelperDB.profiles) do
+            table.insert(profileNames, profileName)
+        end
+        table.sort(profileNames)
+        return profileNames
+    end
+
+    local function updateProfileDropdown()
+        UIDropDownMenu_SetText(profileDropdown, MinimapMarkerHelperDB.activeProfile)
+    end
+
+    UIDropDownMenu_Initialize(profileDropdown, function(_, level)
+        for _, profileName in ipairs(getProfileNames()) do
+            local selectedProfileName = profileName
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = selectedProfileName
+            info.checked = selectedProfileName == MinimapMarkerHelperDB.activeProfile
+            info.func = function()
+                loadProfile(selectedProfileName)
+                updateProfileDropdown()
+            end
+            UIDropDownMenu_AddButton(info, level)
+        end
+    end)
+
+    local addProfileButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    addProfileButton:SetSize(60, 26)
+    addProfileButton:SetPoint("LEFT", profileNameBox, "RIGHT", 6, 0)
+    addProfileButton:SetText("추가")
+    addProfileButton:SetScript("OnClick", function()
+        local profileName = normalizeProfileName(profileNameBox:GetText())
+        if profileName and not MinimapMarkerHelperDB.profiles[profileName] then
+            saveProfile(profileName)
+            profileNameBox:SetText("")
+            profileNameBox:ClearFocus()
+            updateProfileDropdown()
+        end
+    end)
+
+    local saveProfileButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    saveProfileButton:SetSize(138, 26)
+    saveProfileButton:SetPoint("TOPLEFT", panel, "TOPLEFT", RIGHT_CONTENT_X,
+        profileContentY - PROFILE_ROW_HEIGHT - PROFILE_ROW_GAP)
+    saveProfileButton:SetText("프로필 저장")
+    saveProfileButton:SetScript("OnClick", function()
+        saveProfile(MinimapMarkerHelperDB.activeProfile)
+        updateProfileDropdown()
+    end)
+
+    local deleteProfileButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    deleteProfileButton:SetSize(104, 26)
+    deleteProfileButton:SetPoint("LEFT", saveProfileButton, "RIGHT", 6, 0)
+    deleteProfileButton:SetText("프로필 삭제")
+    deleteProfileButton:SetScript("OnClick", function()
+        local profileName = MinimapMarkerHelperDB.activeProfile
+        local profileCount = 0
+        for _ in pairs(MinimapMarkerHelperDB.profiles) do
+            profileCount = profileCount + 1
+        end
+        if profileCount <= 1 then
+            return
+        end
+        MinimapMarkerHelperDB.profiles[profileName] = nil
+        if MinimapMarkerHelperDB.activeProfile == profileName then
+            for nextProfileName in pairs(MinimapMarkerHelperDB.profiles) do
+                loadProfile(nextProfileName)
+                break
+            end
+        end
+        updateProfileDropdown()
+    end)
+
+    updateAddonControlState = function()
+        local isEnabled = MinimapMarkerHelperDB.addonEnabled
+        groundTextureCheckbox:SetEnabled(isEnabled)
+        markerSizeSlider:SetEnabled(isEnabled)
+        minimapIconScaleSlider:SetEnabled(isEnabled)
+        profileNameBox:SetEnabled(isEnabled)
+        addProfileButton:SetEnabled(isEnabled)
+        saveProfileButton:SetEnabled(isEnabled)
+        deleteProfileButton:SetEnabled(isEnabled)
+        if isEnabled then
+            UIDropDownMenu_EnableDropDown(profileDropdown)
+        else
+            UIDropDownMenu_DisableDropDown(profileDropdown)
+        end
+    end
+
     panel:SetScript("OnShow", function()
-        markerCheckbox:SetChecked(MinimapMarkerHelperDB.enabled)
+        addonCheckbox:SetChecked(MinimapMarkerHelperDB.addonEnabled)
         groundTextureCheckbox:SetChecked(MinimapMarkerHelperDB.hideGroundTextures)
         syncMarkerSizeSlider()
+        syncMinimapIconScaleSlider()
+        updateProfileDropdown()
+        updateAddonControlState()
         refreshBoard()
     end)
     panel:Hide()
@@ -471,7 +821,7 @@ local function buildMinimapUI()
     button:SetFrameLevel(Minimap:GetFrameLevel() + 5)
     button.icon = button:CreateTexture(nil, "ARTWORK")
     button.icon:SetAllPoints()
-    button.icon:SetTexture("Interface\\Icons\\INV_Misc_Map_01")
+    button.icon:SetTexture(ADDON_PATH .. "Media\\MinimapMarkerHelperIcon.png")
     button:SetScript("OnClick", togglePanel)
     button:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")

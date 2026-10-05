@@ -38,6 +38,7 @@ jobs:
           package_dir="package/MinimapMarkerHelper"
           mkdir -p "$package_dir"
           cp MinimapMarkerHelper.toc MinimapMarkerHelper.lua "$package_dir/"
+          cp -R Media "$package_dir/"
           (
             cd package
             zip -r "../MinimapMarkerHelper-${tag}.zip" MinimapMarkerHelper
